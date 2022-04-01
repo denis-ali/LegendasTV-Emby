@@ -1,35 +1,29 @@
-using System.Runtime.CompilerServices;
-using System.Globalization;
-using System.Text.RegularExpressions;
-using System.Linq;
-using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.IO;
-using System.Net;
-using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
-using System.Web;
 using HtmlAgilityPack;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Net;
+using MediaBrowser.Controller;
 using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.TV;
-using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Providers;
-using MediaBrowser.Controller.Resolvers;
 using MediaBrowser.Controller.Security;
-using MediaBrowser.Controller.Sorting;
 using MediaBrowser.Controller.Subtitles;
 using MediaBrowser.Model.Globalization;
 using MediaBrowser.Model.IO;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Providers;
 using MediaBrowser.Model.Serialization;
-using MediaBrowser.Controller;
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Web;
 
 namespace LegendasTV
 {
@@ -164,7 +158,7 @@ namespace LegendasTV
 
             var requestOptions = new HttpRequestOptions()
             {
-                Url = string.Format(URL_BASE + "/legenda/sugestao/{0}", HttpUtility.HtmlEncode(query)),
+                Url = string.Format(URL_BASE + "/legenda/sugestao/{0}", HttpUtility.HtmlEncode(Regex.Replace(query, @"[^a-zA-Z0-9_\-.\s]+", "", RegexOptions.Compiled))),
                 CancellationToken = cancellationToken,
             };
 
@@ -208,7 +202,7 @@ namespace LegendasTV
 
             var requestOptions = new HttpRequestOptions()
             {
-                Url = string.Format(URL_BASE + "/legenda/busca/{0}/{1}/-/{2}/{3}", HttpUtility.HtmlEncode(query), GetLanguageId(lang), page, itemId),
+                Url = string.Format(URL_BASE + "/legenda/busca/{0}/{1}/-/{2}/{3}", HttpUtility.HtmlEncode(Regex.Replace(query, @"[^a-zA-Z0-9_\-.\s]+", "", RegexOptions.Compiled)), GetLanguageId(lang), page, itemId),
                 CancellationToken = cancellationToken,
                 Referer = URL_BASE + "/busca/" + query
             };
