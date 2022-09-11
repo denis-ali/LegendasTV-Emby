@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using MediaBrowser.Common.Configuration;
 
 namespace LegendasTV
