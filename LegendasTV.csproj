@@ -2,16 +2,16 @@
 
   <PropertyGroup>
     <TargetFrameworks>netstandard2.0;</TargetFrameworks>
-    <AssemblyVersion>0.0.3.0</AssemblyVersion>
-    <FileVersion>0.0.3.0</FileVersion>
-    <Version>0.0.3</Version>
+    <AssemblyVersion>0.0.4.0</AssemblyVersion>
+    <FileVersion>0.0.4.0</FileVersion>
+    <Version>0.4.0</Version>
     <ReleaseVersion>0.3</ReleaseVersion>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="HtmlAgilityPack" Version="1.11.42" />
-    <PackageReference Include="mediabrowser.server.core" Version="4.6.0.50" />
-    <PackageReference Include="System.Memory" Version="4.5.4" />
+    <PackageReference Include="HtmlAgilityPack" Version="1.11.45" />
+    <PackageReference Include="mediabrowser.server.core" Version="4.7.6" />
+    <PackageReference Include="System.Memory" Version="4.5.5" />
   </ItemGroup>
 
   <ItemGroup>
@@ -19,6 +19,7 @@
     <None Remove="Configuration\legendastv.js" />
     <None Remove="HtmlAgilityPack.dll" />
     <None Remove="thumb.png" />
+    <None Remove=".DS_Store" />
   </ItemGroup>
 
   <ItemGroup>
@@ -28,8 +29,17 @@
     <EmbeddedResource Include="thumb.png" />
   </ItemGroup>
 
+  <Target Name="CopyPluginDll_win" AfterTargets="Build" Condition=" '$(OS)' == 'Windows_NT' ">
+      <ItemGroup>
+          <DataFiles Include="$(TargetPath)" />
+      </ItemGroup>
+
+      <Copy SourceFiles="@DataFiles" DestinationFolder="%AppData%\Emby-Server\programdata\plugins\" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!--
   <Target Name="PostBuild" AfterTargets="PostBuildEvent">
     <Exec Command="xcopy &quot;$(TargetPath)&quot; &quot;%AppData%\Emby-Server\programdata\plugins\&quot; /y" />
   </Target>
-
+  -->
 </Project>

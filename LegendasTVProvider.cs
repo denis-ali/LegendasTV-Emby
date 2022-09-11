@@ -1,3 +1,14 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.IO.Compression;
+using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Web;
 using HtmlAgilityPack;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Net;
@@ -14,23 +25,13 @@ using MediaBrowser.Model.IO;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Providers;
 using MediaBrowser.Model.Serialization;
-using System;
-using System.Collections.Generic;
-using System.Globalization;
-using System.IO;
-using System.Linq;
-using System.Text;
-using System.Text.RegularExpressions;
-using System.Threading;
-using System.Threading.Tasks;
-using System.Web;
 
 namespace LegendasTV
 {
     class LegendasTVProvider : ISubtitleProvider, IDisposable
     {
         public static readonly string URL_BASE = "http://legendas.tv";
-        public static readonly string URL_LOGIN = URL_BASE + "/login";
+        public static readonly string URL_LOGIN = $"{URL_BASE}/login";
 
         private readonly ILogger _logger;
         private readonly IHttpClient _httpClient;
@@ -39,26 +40,16 @@ namespace LegendasTV
         private readonly ILibraryManager _libraryManager;
         private readonly ILocalizationManager _localizationManager;
         private readonly IJsonSerializer _jsonSerializer;
-        private readonly IServerApplicationPaths _appPaths;
-        private readonly IFileSystem _fileSystem;
-        private readonly IZipClient _zipClient;
+
         private const string PasswordHashPrefix = "h:";
 
         public string Name => "Legendas TV";
 
         public IEnumerable<VideoContentType> SupportedMediaTypes => new[] { VideoContentType.Episode, VideoContentType.Movie };
 
-        public LegendasTVProvider(
-            ILogger logger,
-            IHttpClient httpClient,
-            IServerConfigurationManager config,
-            IEncryptionManager encryption,
-            ILocalizationManager localizationManager,
-            ILibraryManager libraryManager,
-            IJsonSerializer jsonSerializer,
-            IServerApplicationPaths appPaths,
-            IFileSystem fileSystem,
-            IZipClient zipClient)
+        public LegendasTVProvider(ILogger logger, IHttpClient httpClient, IServerConfigurationManager config, IEncryptionManager encryption,
+                                  ILocalizationManager localizationManager, ILibraryManager libraryManager, IJsonSerializer jsonSerializer,
+                                  IServerApplicationPaths appPaths, IFileSystem fileSystem, IZipClient zipClient)
         {
             _logger = logger;
             _httpClient = httpClient;
@@ -67,14 +58,12 @@ namespace LegendasTV
             _libraryManager = libraryManager;
             _localizationManager = localizationManager;
             _jsonSerializer = jsonSerializer;
-            _appPaths = appPaths;
-            _fileSystem = fileSystem;
-            _zipClient = zipClient;
 
             _config.NamedConfigurationUpdating += _config_NamedConfigurationUpdating;
 
             // Load HtmlAgilityPack from embedded resource
             EmbeddedAssembly.Load(GetType().Namespace + ".HtmlAgilityPack.dll", "HtmlAgilityPack.dll");
+
             AppDomain.CurrentDomain.AssemblyResolve += new ResolveEventHandler((object sender, ResolveEventArgs args) => EmbeddedAssembly.Get(args.Name));
         }
 
@@ -89,35 +78,40 @@ namespace LegendasTV
                 return Array.Empty<RemoteSubtitleInfo>();
             }
 
-            if (await Login())
+            if (await Login(cancellationToken))
             {
-                var legendatvIds = FindIds(request, cancellationToken);
+                BaseItem item = _libraryManager.FindByPath(request.MediaPath, false);
+
+                var legendatvIds = FindIds(request, item, cancellationToken);
                 var searchTasks = new List<Task<IEnumerable<RemoteSubtitleInfo>>>();
+
                 Action<string> addSearchTask;
+
                 switch (request.ContentType)
                 {
                     // Series Episode
                     case VideoContentType.Episode:
+                    {
+                        addSearchTask = (id) =>
                         {
-                            addSearchTask = (id) =>
-                            {
-                                searchTasks.Add(Search(cancellationToken, itemId: id, lang: lang, query: $"S{request.ParentIndexNumber:D02}E{request.IndexNumber:D02}"));
-                                searchTasks.Add(Search(cancellationToken, itemId: id, lang: lang, query: $"{request.ParentIndexNumber:D02}x{request.IndexNumber:D02}"));
-                            };
-                            break;
-                        }
+                            searchTasks.Add(Search(item.Id, cancellationToken, itemId: id, lang: lang, query: $"S{request.ParentIndexNumber:D02}E{request.IndexNumber:D02}"));
+                            searchTasks.Add(Search(item.Id, cancellationToken, itemId: id, lang: lang, query: $"{request.ParentIndexNumber:D02}x{request.IndexNumber:D02}"));
+                        };
+
+                        break;
+                    }
 
                     // Movie
-                    default:
                     case VideoContentType.Movie:
+                    default:
+                    {
+                        addSearchTask = (id) =>
                         {
-                            addSearchTask = (id) =>
-                            {
-                                searchTasks.Add(Search(cancellationToken, lang: lang, itemId: id));
-                            };
+                            searchTasks.Add(Search(item.Id, cancellationToken, lang: lang, itemId: id));
+                        };
 
-                            break;
-                        }
+                        break;
+                    }
                 }
 
                 foreach (var id in legendatvIds)
@@ -135,77 +129,74 @@ namespace LegendasTV
             }
         }
 
-        private IEnumerable<string> FindIds(SubtitleSearchRequest request, CancellationToken cancellationToken, int depth = 0)
+        private IEnumerable<string> FindIds(SubtitleSearchRequest request, BaseItem item, CancellationToken cancellationToken, int depth = 0)
         {
-            BaseItem item = _libraryManager.FindByPath(request.MediaPath, false);
-            var query = "";
+            var query = request.ContentType == VideoContentType.Episode ? ((Episode)item).Series.OriginalTitle : item.OriginalTitle;
+            string imdbId = request.ContentType == VideoContentType.Episode ? ((Episode)item).Series.ProviderIds["Imdb"].Substring(2) : item.ProviderIds["Imdb"].Substring(2);
 
-            string imdbId = "";
-            switch (request.ContentType)
-            {
-                case VideoContentType.Episode:
-                    var series = ((Episode)item).Series;
-                    query = series.OriginalTitle;
-                    imdbId = series.ProviderIds["Imdb"].Substring(2);
-                    break;
-                case VideoContentType.Movie:
-                    query = item.OriginalTitle;
-                    imdbId = item.ProviderIds["Imdb"].Substring(2);
-                    break;
-            }
-            if (!int.TryParse(imdbId, out var imdbIdInt))
-                imdbIdInt = -1;
+            if (!int.TryParse(imdbId, out var imdbIdInt)) imdbIdInt = -1;
 
             var requestOptions = new HttpRequestOptions()
             {
-                Url = string.Format(URL_BASE + "/legenda/sugestao/{0}", HttpUtility.HtmlEncode(Regex.Replace(query, @"[^a-zA-Z0-9_\-.\s]+", "", RegexOptions.Compiled))),
-                CancellationToken = cancellationToken,
+                Url = $"{URL_BASE}/legenda/sugestao/{HttpUtility.HtmlEncode(ReplaceSpecialCharacters(query, " "))}",
+                CancellationToken = cancellationToken
             };
 
-            using (var stream = _httpClient.Get(requestOptions).Result)
+            var response = String.Empty;
+
+            var t = Task.Run(async delegate
             {
-                using (var reader = new StreamReader(stream))
+                var pass = 1;
+
+                do
                 {
-                    var response = reader.ReadToEnd();
-                    var suggestions = _jsonSerializer.DeserializeFromString<List<LegendasTVSuggestion>>(response);
-
-                    foreach (var suggestion in suggestions)
+                    using (var stream = _httpClient.Get(requestOptions).Result)
                     {
-                        var source = suggestion._source;
-                        if (!int.TryParse(source.id_imdb, out var sourceImdb))
-                            sourceImdb = -2;
-
-                        if (((sourceImdb == imdbIdInt) || (source.id_imdb == imdbId)) && 
-                           (request.ContentType == VideoContentType.Movie ? source.tipo == "M" : true))
+                        using (var reader = new StreamReader(stream))
                         {
-                            yield return source.id_filme;
+                            response = reader.ReadToEnd();
+
+                            await Task.Delay(1000);
                         }
                     }
-                }
+                } while ((String.IsNullOrEmpty(response) || response == "[]") && pass++ <= 10);
 
+                _logger.Info(pass <= 10 ? $"Success on attempt: {pass}" : $"Legendas.tv has not returned suggestions after {pass} attempts.");
+            });
+
+            t.Wait();
+
+            var suggestions = _jsonSerializer.DeserializeFromString<List<LegendasTVSuggestion>>(response);
+
+            foreach (var suggestion in suggestions)
+            {
+                var source = suggestion._source;
+
+                if (!int.TryParse(source.id_imdb, out var sourceImdb)) sourceImdb = -2;
+
+                if (((sourceImdb == imdbIdInt) || (source.id_imdb == imdbId)) && (request.ContentType != VideoContentType.Movie || source.tipo == "M"))
+                {
+                    yield return source.id_filme;
+                }
             }
         }
 
-        public async Task<IEnumerable<RemoteSubtitleInfo>> Search(
-            CancellationToken cancellationToken,
-            CultureDto lang = null,
-            string query = "-",
-            string page = "-",
-            string itemId = "-"
-            )
+        public async Task<IEnumerable<RemoteSubtitleInfo>> Search(Guid idMedia, CancellationToken cancellationToken, CultureDto lang = null, string query = "-", string page = "-", string itemId = "-")
         {
             if (lang == null)
             {
                 _logger.Error("No language defined.");
+
                 return Array.Empty<RemoteSubtitleInfo>();
             }
 
             var requestOptions = new HttpRequestOptions()
             {
-                Url = string.Format(URL_BASE + "/legenda/busca/{0}/{1}/-/{2}/{3}", HttpUtility.HtmlEncode(Regex.Replace(query, @"[^a-zA-Z0-9_\-.\s]+", "", RegexOptions.Compiled)), GetLanguageId(lang), page, itemId),
+                Url = $"{URL_BASE}/legenda/busca/{HttpUtility.HtmlEncode(query)}/{GetLanguageId(lang)}/-/{page}/{itemId}",
                 CancellationToken = cancellationToken,
-                Referer = URL_BASE + "/busca/" + query
+                Referer = $"{URL_BASE}/busca/{query}"
             };
+
             requestOptions.RequestHeaders.Add("X-Requested-With", "XMLHttpRequest");
 
             using (var stream = await _httpClient.Get(requestOptions))
@@ -214,18 +205,20 @@ namespace LegendasTV
                 {
                     var response = reader.ReadToEnd();
 
-                    return ParseHtml(response, lang)
-                        .OrderBy(sub => LegendasTVIdParts.parse(sub.Id).sortingOverride)
+                    return ParseHtml(idMedia, response, lang)
+                        .OrderBy(sub => LegendasTVIdParts.Parse(sub.Id).sortingOverride)
                         .ThenByDescending(sub => sub.CommunityRating)
                         .ThenByDescending(sub => sub.DownloadCount);
                 }
             }
         }
 
-        private IEnumerable<RemoteSubtitleInfo> ParseHtml(string html, CultureDto lang)
+        private IEnumerable<RemoteSubtitleInfo> ParseHtml(Guid idMedia, string html, CultureDto lang)
         {
             var doc = new HtmlDocument();
+
             doc.LoadHtml(html);
+
             var subtitleNodes = doc.DocumentNode.SelectNodes("//div[contains(@class, 'list_element')]//article/div") ?? new HtmlNodeCollection(doc.DocumentNode);
 
             foreach (var subtitleNode in subtitleNodes)
@@ -233,9 +226,9 @@ namespace LegendasTV
                 var link = subtitleNode.SelectSingleNode(".//a");
                 var data = subtitleNode.SelectSingleNode(".//p[contains(@class, 'data')]");
                 var dataMatch = Regex.Match(data.InnerText.Trim(), @"^\D*?(\d+) +downloads,.*nota +(\d+) *,.*em *(.+)$").Groups;
-
                 var downloadId = Regex.Match(link.Attributes["href"].Value, @"^.*download\/(.*?)\/.*$").Groups[1].Value;
                 var name = link.InnerText;
+
                 yield return new RemoteSubtitleInfo()
                 {
                     Id = new LegendasTVIdParts()
@@ -244,6 +237,7 @@ namespace LegendasTV
                         name = name,
                         language = lang.TwoLetterISOLanguageName,
                         sortingOverride = subtitleNode.HasClass("destaque") ? -1 : 0,
+                        idMedia = idMedia
                     }.fullId,
                     Name = name,
                     DownloadCount = int.Parse(dataMatch[1].Value),
@@ -254,22 +248,52 @@ namespace LegendasTV
                     IsHashMatch = false,
                     ProviderName = this.Name,
                     Author = data.SelectSingleNode("//a")?.InnerText,
-                    ThreeLetterISOLanguageName = lang.ThreeLetterISOLanguageName
+                    Language = lang.ThreeLetterISOLanguageName
                 };
             }
 
         }
 
-        public async Task<bool> Login()
+        public async Task<bool> Login(CancellationToken cancellationToken)
         {
+            var doc = new HtmlDocument();
             var options = GetOptions();
             var username = options.LegendasTVUsername;
+
+            var requestOptions = new HttpRequestOptions()
+            {
+                Url = $"{URL_BASE}",
+                CancellationToken = cancellationToken
+            };
+
+            using (var stream = await _httpClient.Get(requestOptions))
+            {
+                using (var reader = new StreamReader(stream))
+                {
+                    var html = reader.ReadToEnd();
+
+                    doc.LoadHtml(html);
+
+                    var loginNode = doc.DocumentNode.SelectSingleNode("//div[contains(@class, 'login')]") ?? new HtmlNode(HtmlNodeType.Element, doc, 0);
+                    var usernameNode = loginNode.SelectSingleNode(".//a").InnerText.ToUpperInvariant();
+
+                    if (usernameNode == username.ToUpperInvariant())
+                    {
+                        _logger.Info($"User {username} already logged.");
+
+                        return true;
+                    }
+                }
+            }
+
             var password = DecryptPassword(options.LegendasTVPasswordHash);
-            string result = await SendPost(URL_LOGIN, string.Format("data[User][username]={0}&data[User][password]={1}", username, password));
+
+            string result = await SendPost(URL_LOGIN, $"data[User][username]={username}&data[User][password]={password}");
 
             if (result.Contains("Usuário ou senha inválidos"))
             {
                 _logger.Error("Invalid username or password");
+
                 return false;
             }
 
@@ -283,28 +307,46 @@ namespace LegendasTV
 
         public async Task<SubtitleResponse> GetSubtitles(string id, CancellationToken cancellationToken, int depth = 0)
         {
-
-            var idParts = LegendasTVIdParts.parse(id);
-            var savePath = $"{_appPaths.TempDirectory}{_fileSystem.DirectorySeparatorChar}{Name}_{idParts.downloadId}";
+            var idParts = LegendasTVIdParts.Parse(id);
 
             var requestOptions = new HttpRequestOptions()
             {
-                Url = string.Format(URL_BASE + "/downloadarquivo/" + idParts.downloadId),
+                Url = $"{URL_BASE}/downloadarquivo/{idParts.downloadId}",
                 CancellationToken = cancellationToken,
             };
 
             try
             {
-                using (var stream = await _httpClient.Get(requestOptions))
+                using (var responseStream = await _httpClient.Get(requestOptions))
                 {
-                    _logger.Info("Extracting file to " + savePath);
-                    _zipClient.ExtractAll(stream, savePath, true);
+                    _logger.Info($"Extracting file to memory");
 
+                    using (var zip = new ZipArchive(responseStream, ZipArchiveMode.Read))
+                    {
+                        var mediaItem = _libraryManager.GetItemById(idParts.idMedia);
+                        var bestMatch = FindBestMatch(mediaItem.FileNameWithoutExtension, zip.Entries);
+
+                        _logger.Info($"Best subtitle found: {bestMatch}");
+
+                        var entryStream = new MemoryStream();
+
+                        await zip.Entries.FirstOrDefault(e => e.FullName == bestMatch).Open().CopyToAsync(entryStream);
+
+                        entryStream.Position = 0;
+
+                        return new SubtitleResponse()
+                        {
+                            Format = Regex.Replace(Path.GetExtension(bestMatch), @"\.+", ""),
+                            IsForced = false,
+                            Stream = entryStream,
+                            Language = idParts.language
+                        };
+                    }
                 }
             }
             catch (System.Exception)
             {
-                if (depth < 1 && await Login())
+                if (depth < 1 && await Login(cancellationToken))
                 {
                     return await GetSubtitles(id, cancellationToken, depth + 1);
                 }
@@ -313,40 +355,56 @@ namespace LegendasTV
                     throw;
                 }
             }
+        }
 
-            var bestCandidate = "";
-            foreach (var file in _fileSystem.GetFiles(savePath, true))
+        private string FindBestMatch(string name, IReadOnlyCollection<ZipArchiveEntry> subtitleFiles)
+        {
+            if (!subtitleFiles.Any()) return "";
+
+            var fileNameParts = BreakNameInParts(name);
+            var candidates = new List<Tuple<string, int>>();
+
+            foreach (var file in subtitleFiles)
             {
-                _logger.Info(file.Name);
-                if (file.Extension.ToLowerInvariant() == ".srt" && (string.IsNullOrEmpty(bestCandidate) || _fileSystem.GetFileNameWithoutExtension(file.Name) == idParts.name))
-                {
-                    bestCandidate = file.FullName;
-                }
+                var subtitleParts = BreakNameInParts(Path.GetFileNameWithoutExtension(file.Name));
+                var exceptions = fileNameParts.Except(subtitleParts);
+
+                candidates.Add(new Tuple<string, int>(file.FullName, exceptions.Count()));
             }
 
-            _logger.Info("Best subtitle found: " + bestCandidate);
+            var sorted = candidates.OrderBy(t => t.Item2);
 
-            var ms = new MemoryStream();
-            await _fileSystem.GetFileStream(bestCandidate, FileOpenMode.Open, FileAccessMode.Read, FileShareMode.Read).CopyToAsync(ms);
-            ms.Position = 0;
+            _logger.Info($"Media file: {name}");
 
-            return new SubtitleResponse()
+            foreach (var compareResult in sorted)
             {
-                Format = "srt",
-                IsForced = false,
-                Stream = ms,
-                Language = idParts.language
-            };
+                _logger.Info($"File: {compareResult.Item1} has {compareResult.Item2} difference(s)");
+            }
+
+            return sorted.First().Item1;
+        }
+
+        private IEnumerable<string> BreakNameInParts(string name)
+        {
+            name = name.ToLowerInvariant();
+            name = Regex.Replace(name, "[-\\.,\\[\\]_=]", " ");
+            name = name.Trim();
+            name = Regex.Replace(name, " +", " ");
+
+            return name.Split(' ');
         }
 
         private string GetLanguageId(CultureDto cultureDto)
         {
             var search = cultureDto?.TwoLetterISOLanguageName ?? "";
+
             if (search != "pt-br")
             {
                 search = search.Split(new[] { '-' }, 2)?[0] ?? search;
             }
-            _logger.Info("Searching language: " + search);
+
+            _logger.Info($"Searching language: {search}");
+
             var langMap = new Dictionary<string, string>()
             {
                 {"pt-br", "1"},
@@ -367,8 +425,13 @@ namespace LegendasTV
                 {"it", "16"},
                 {"pl", "17"}
             };
-            string output;
-            return langMap.TryGetValue(search, out output) ? output : null;
+
+            return langMap.TryGetValue(search, out string output) ? output : null;
+        }
+
+        private string ReplaceSpecialCharacters(string str, string rplc)
+        {
+            return Regex.Replace(str, "[^a-zA-Z0-9_.]+", rplc, RegexOptions.Compiled);
         }
 
         private async Task<string> SendPost(string url, string postData)
@@ -402,8 +465,7 @@ namespace LegendasTV
 
             var options = (LegendasTVOptions)e.NewConfiguration;
 
-            if (options != null &&
-                !string.IsNullOrWhiteSpace(options.LegendasTVPasswordHash) &&
+            if (options != null && !string.IsNullOrWhiteSpace(options.LegendasTVPasswordHash) &&
                 !options.LegendasTVPasswordHash.StartsWith(PasswordHashPrefix, StringComparison.OrdinalIgnoreCase))
             {
                 options.LegendasTVPasswordHash = EncryptPassword(options.LegendasTVPasswordHash);
@@ -436,6 +498,7 @@ namespace LegendasTV
         public string downloadId;
         public string name;
         public string language;
+        public Guid idMedia;
         /// <summary>Set to higher number if this is to be sorted higher than the other parameters.</summary>
         public int sortingOverride = 0;
 
@@ -443,21 +506,23 @@ namespace LegendasTV
 
         public override string ToString() => fullId;
 
-        public static LegendasTVIdParts parse(string id)
+        public static LegendasTVIdParts Parse(string id)
         {
-            var idParts = id.Split(new[] { ':' }, 4);
+            var idParts = id.Split(new[] { ':' }, 5);
+
             return new LegendasTVIdParts()
             {
                 downloadId = idParts[0],
                 name = idParts[1],
                 language = idParts[2],
                 sortingOverride = int.Parse(idParts[3]),
+                idMedia = Guid.Parse(idParts[4])
             };
         }
 
         public string fullId
         {
-            get => String.Join(":", downloadId, name, language, sortingOverride);
+            get => String.Join(":", downloadId, name, language, sortingOverride, idMedia.ToString());
         }
     }
 

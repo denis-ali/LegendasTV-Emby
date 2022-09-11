@@ -1,5 +1,4 @@
 using MediaBrowser.Common.Configuration;
-using System.Collections.Generic;
 
 namespace LegendasTV
 {
