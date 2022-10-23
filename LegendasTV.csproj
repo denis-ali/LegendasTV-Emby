@@ -2,15 +2,15 @@
 
   <PropertyGroup>
     <TargetFrameworks>netstandard2.0;</TargetFrameworks>
-    <AssemblyVersion>0.0.4.0</AssemblyVersion>
-    <FileVersion>0.0.4.0</FileVersion>
-    <Version>0.4.0</Version>
-    <ReleaseVersion>0.3</ReleaseVersion>
+    <AssemblyVersion>0.0.4.1</AssemblyVersion>
+    <FileVersion>0.0.4.1</FileVersion>
+    <Version>0.4.1</Version>
+    <ReleaseVersion>0.4</ReleaseVersion>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="HtmlAgilityPack" Version="1.11.45" />
-    <PackageReference Include="mediabrowser.server.core" Version="4.7.6" />
+    <PackageReference Include="HtmlAgilityPack" Version="1.11.46" />
+    <PackageReference Include="mediabrowser.server.core" Version="4.7.7" />
     <PackageReference Include="System.Memory" Version="4.5.5" />
   </ItemGroup>
 
